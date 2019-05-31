@@ -1,0 +1,30 @@
+--- a/src/examples/cpp/console.cpp
++++ b/src/examples/cpp/console.cpp
+@@ -22,6 +22,7 @@
+ #include <log4cxx/logmanager.h>
+ #include <iostream>
+ #include <locale.h>
++#include <cstring>
+ 
+ using namespace log4cxx;
+ using namespace log4cxx::helpers;
+--- a/src/main/cpp/inputstreamreader.cpp
++++ b/src/main/cpp/inputstreamreader.cpp
+@@ -20,6 +20,7 @@
+ #include <log4cxx/helpers/exception.h>
+ #include <log4cxx/helpers/pool.h>
+ #include <log4cxx/helpers/bytebuffer.h>
++#include <cstring>
+ 
+ using namespace log4cxx;
+ using namespace log4cxx::helpers;
+--- a/src/main/cpp/socketoutputstream.cpp
++++ b/src/main/cpp/socketoutputstream.cpp
+@@ -19,6 +19,7 @@
+ #include <log4cxx/helpers/socketoutputstream.h>
+ #include <log4cxx/helpers/socket.h>
+ #include <log4cxx/helpers/bytebuffer.h>
++#include <cstring>
+ 
+ using namespace log4cxx;
+ using namespace log4cxx::helpers;

@@ -1,0 +1,398 @@
+#!/usr/bin/env python
+
+from __future__ import print_function
+from catkin_pkg.package import parse_package
+import stringcase
+import yaml
+import urllib
+import sys
+from vcstools import get_vcs_client
+import tempfile
+import shutil
+from os.path import join
+from subprocess import Popen, PIPE
+import rospkg
+import argparse
+import re
+
+
+BASE_ROSDISTRO_URL = "https://raw.githubusercontent.com/ros/rosdistro/master/"
+DEFAULT_INDEX_URL = BASE_ROSDISTRO_URL + "index.yaml"
+
+
+def get_index(url=DEFAULT_INDEX_URL):
+    index_file = urllib.urlopen(url)
+    return yaml.load(index_file.read())
+
+
+def get_distro(distro_name, base_url=BASE_ROSDISTRO_URL):
+    index_url = base_url + "index.yaml"
+    index = get_index(index_url)
+
+    try:
+        distro_url = (
+            base_url + index["distributions"][distro_name]["distribution"][0]
+        )
+    except (KeyError, IndexError):
+        print(
+            "distribution {} not found in {}".format(distro_name, index_url),
+            file=sys.stderr,
+        )
+
+    distro_file = urllib.urlopen(distro_url)
+    return yaml.load(distro_file.read())
+
+
+class VcsInfo:
+    def __init__(self, vcs_type, url, version):
+        self.vcs_type = vcs_type
+        self.url = url
+        self.version = version
+
+
+def get_vcs_info(package_name, distro):
+    repositories = distro["repositories"]
+    package_info = None
+
+    try:
+        package_info = repositories[package_name]
+    except KeyError:
+        try:
+            for info in repositories.values():
+                try:
+                    if package_name in info["release"]["packages"]:
+                        package_info = info
+                        break
+                except KeyError:
+                    continue
+        except KeyError:
+            print(
+                "package {} not found in distribution".format(package_name),
+                file=sys.stderr,
+            )
+
+    if package_info is None:
+        return (None, None)
+
+    try:
+        release_info = package_info["release"]
+        release_url = release_info["url"]
+        version = release_info["version"]
+        tag = release_info["tags"]["release"]
+        return (
+            VcsInfo(
+                "git",
+                release_url,
+                tag.format(package=package_name, version=version),
+            ),
+            version,
+        )
+    except (KeyError, IndexError):
+        print(
+            "no release repository found for package {}".format(package_name),
+            file=sys.stderr,
+        )
+
+    try:
+        source_info = package_info["source"]
+        vcs_type = source_info["type"]
+        source_url = source_info["url"]
+        version = source_info["version"]
+        return (VcsInfo(vcs_type, source_url, version), version)
+    except (KeyError, IndexError):
+        print(
+            "no source repository found for package {}".format(package_name),
+            file=sys.stderr,
+        )
+
+
+def vcs_checkout(vcs_info, path):
+    client = get_vcs_client(vcs_info.vcs_type, path)
+    client.checkout(vcs_info.url, version=vcs_info.version, verbose=False)
+
+
+def get_hash(path):
+    process = Popen(
+        ["guix", "hash", "-rx", path], stdin=PIPE, stdout=PIPE, stderr=PIPE
+    )
+    output, err = process.communicate()
+    if process.returncode == 0:
+        return output.rstrip()
+    else:
+        print(err, file=sys.stderr)
+        return None
+
+
+def generate_guix_package(ros_package):
+    pass
+
+
+def to_guile(data):
+    if isinstance(data, list):
+        output = "("
+        for entry in data[:-1]:
+            if entry is not None:
+                output += to_guile(entry) + " "
+        for entry in data[-1:]:
+            if entry is not None:
+                output += to_guile(entry)
+        output += ")"
+        return output
+    else:
+        return str(data)
+
+
+class String(object):
+    def __init__(self, data):
+        self.data = data
+
+    def __str__(self):
+        return '"' + str(self.data) + '"'
+
+
+class List(object):
+    def __init__(self, data):
+        self.data = data
+
+    def __str__(self):
+        return "`" + to_guile(self.data)
+
+
+def format_name(name):
+    name = stringcase.spinalcase(name)
+    if name.startswith("python-"):
+        name = "python2" + name[len("python"):]
+    if name.startswith("lib"):
+        name = name[len("lib"):]
+    if name.endswith("-dev"):
+        name = name[: -len("-dev")]
+    if name == "python2-yaml":
+        name = "python2-pyyaml"
+    if name == "gtest":
+        name = "googletest"
+    if name == "linux-kernel-headers":
+        name = "linux-libre-headers"
+    if name == "python2-imaging":
+        name = "python2-pillow"
+    if name == "python2-wxtools":
+        name = "python2-wxwidgets"
+    return name
+
+
+def generate_inputs(input_list):
+    return List(
+        [
+            [String(format_name(i.name)), "," + format_name(i.name)]
+            for i in input_list
+        ]
+    )
+
+
+def get_license(ros_package):
+    if ros_package.licenses:
+        ros_license = str(ros_package.licenses[0])
+
+        if ros_license == "BSD":
+            return "license:bsd-3"
+        elif ros_license == "MIT":
+            return "license:expat"
+        if ros_license == "Apache License 2.0" or ros_license == "Apache 2.0":
+            return "license:asl2.0"
+        if ros_license == "ISC":
+            return "license:isc"
+        if ros_license == "LGPL-2.1":
+            return "license:lgpl2.1"
+
+    return "license:bsd-3"
+
+
+def get_url(ros_package):
+    for url in ros_package.urls:
+        if url.type == "website":
+            return url.url
+
+    if ros_package.urls:
+        return ros_package.urls[0].url
+
+    return "http://wiki.ros.org"
+
+
+def native_inputs(ros_package):
+    dependencies = ros_package.buildtool_depends
+
+    if dependencies:
+        return ["native-inputs", generate_inputs(dependencies)]
+    else:
+        return None
+
+
+def inputs(ros_package):
+    dependencies = ros_package.build_depends
+
+    if dependencies:
+        return ["inputs", generate_inputs(dependencies)]
+    else:
+        return None
+
+
+def propagated_inputs(ros_package):
+    dependencies = ros_package.exec_depends
+
+    if dependencies:
+        return ["propagated-inputs", generate_inputs(dependencies)]
+    else:
+        return None
+
+
+def get_description(ros_package):
+    return re.sub(" +", " ", ros_package.description.replace('"', '\\"'))
+
+
+def generate_guile_package(ros_package, path, vcs_info=None):
+    if vcs_info is None:
+        source = ["local-file", String(path), "#:recursive?", "#t"]
+    elif vcs_info.vcs_type != "git":
+        "vcs other than git are not supported yet"
+        return []
+    else:
+        source = [
+            "origin",
+            ["method", "git-fetch"],
+            [
+                "uri",
+                [
+                    "git-reference",
+                    ["url", String(vcs_info.url)],
+                    ["commit", String(vcs_info.version)],
+                ],
+            ],
+            ["file-name", ["git-file-name", "name", "version"]],
+            ["sha256", ["base32", String(get_hash(path))]],
+        ]
+
+    formatted_name = format_name(ros_package.name)
+    description = get_description(ros_package)
+
+    data = [
+        "define-public",
+        formatted_name,
+        [
+            "package",
+            ["name", String(formatted_name)],
+            ["version", String(ros_package.version)],
+            ["source", source],
+            ["build-system", "cmake-build-system"],
+            native_inputs(ros_package),
+            inputs(ros_package),
+            propagated_inputs(ros_package),
+            ["home-page", String(get_url(ros_package))],
+            ["synopsis", String(description)],
+            ["description", String(description)],
+            ["license", get_license(ros_package)],
+        ],
+    ]
+
+    return to_guile(data)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="create Guix package definition from ROS packages"
+    )
+
+    parser.add_argument(
+        "-p",
+        "--path",
+        type=str,
+        required=False,
+        default=".",
+        help="where to look for ROS packages",
+    )
+
+    parser.add_argument(
+        "packages",
+        type=str,
+        nargs="*",
+        help="packages to convert, all if none provided",
+    )
+
+    parser.add_argument(
+        "-r",
+        "--recursive",
+        action="store_true",
+        help="convert dependencies too",
+    )
+
+    parser.add_argument(
+        "-d", "--distro", required=True, help="ROS distribution"
+    )
+
+    parser.add_argument("-o", "--output", required=True, help="ouput file")
+
+    return parser.parse_args()
+
+
+def get_dependencies(ros_package):
+    dependencies = (
+        ros_package.buildtool_depends
+        + ros_package.build_depends
+        + ros_package.exec_depends
+    )
+    return [dep.name for dep in dependencies]
+
+
+def write_to_file(content, file_path):
+    with open(file_path, "a+") as f:
+        f.write(content)
+        f.write("\n\n")
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    distro = get_distro(args.distro)
+    packages = set(args.packages)
+    unknown_packages = set()
+    packages_done = set()
+
+    if distro is None:
+        sys.exit(1)
+
+    tmpdir = tempfile.mkdtemp()
+    rospack = rospkg.RosPack([args.path])
+
+    if not packages:
+        packages = set(rospack.list())
+
+    while packages:
+        dependencies = []
+
+        for package_name in packages:
+            try:
+                package_path = rospack.get_path(package_name)
+                vcs_info = None
+            except rospkg.common.ResourceNotFound:
+                vcs_info, version = get_vcs_info(package_name, distro)
+                if vcs_info is None:
+                    unknown_packages.add(package_name)
+                    continue
+                checkout_path = join(tmpdir, package_name)
+                vcs_checkout(vcs_info, checkout_path)
+                tmp_rospack = rospkg.RosPack([tmpdir])
+                package_path = tmp_rospack.get_path(package_name)
+
+            ros_package = parse_package(join(package_path, "package.xml"))
+            client = get_vcs_client("git", package_path)
+            guix_package = generate_guile_package(
+                ros_package, package_path, vcs_info
+            )
+            write_to_file(guix_package, args.output)
+
+            if args.recursive:
+                dependencies.extend(get_dependencies(ros_package))
+
+        packages_done.update(packages)
+        packages = set(dependencies).difference(packages_done)
+
+    shutil.rmtree(tmpdir)
+
+    print("unknown packages: " + ", ".join(unknown_packages))

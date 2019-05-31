@@ -1,0 +1,10 @@
+#!/usr/bin/guile -s
+!#
+(use-modules (ice-9 pretty-print))
+
+(let loop ((sexp (read)))
+  (if (not (eof-object? sexp))
+    (begin 
+      (pretty-print sexp)
+      (loop (read))
+#F)))
