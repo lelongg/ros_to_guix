@@ -1,0 +1,9 @@
+catkin-pkg==0.4.12
+docutils==0.14
+pyparsing==2.4.0
+python-dateutil==2.8.0
+PyYAML==5.1.1
+rospkg==1.1.9
+six==1.12.0
+stringcase==1.2.0
+vcstools==0.1.40
