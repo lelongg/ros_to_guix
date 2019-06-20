@@ -112,9 +112,17 @@ def vcs_checkout(vcs_info, path):
 
 
 def get_hash(path):
-    process = Popen(
-        ["guix", "hash", "-rx", path], stdin=PIPE, stdout=PIPE, stderr=PIPE
-    )
+    try:
+        process = Popen(
+            ["guix", "hash", "-rx", path],
+            stdin=PIPE,
+            stdout=PIPE,
+            stderr=PIPE,
+        )
+    except OSError as e:
+        print("cannot run guix: {}".format(e), file=sys.stderr)
+        sys.exit(1)
+
     output, err = process.communicate()
     if process.returncode == 0:
         return output.rstrip()
@@ -161,9 +169,9 @@ class List(object):
 def format_name(name):
     name = stringcase.spinalcase(name)
     if name.startswith("python-"):
-        name = "python2" + name[len("python"):]
+        name = "python2" + name[len("python") :]
     if name.startswith("lib"):
-        name = name[len("lib"):]
+        name = name[len("lib") :]
     if name.endswith("-dev"):
         name = name[: -len("-dev")]
     if name == "python2-yaml":
