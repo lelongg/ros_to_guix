@@ -6,6 +6,16 @@ It contains Guix package definitions needed to build ROS as well as a script to 
 
 ## Package generation
 
+### Prerequisites
+
+You can install the script dependencies with the following command.
+
+```none
+pip install -r ./scripts/requirements.txt
+```
+
+Guix must be installed as well.
+
 ### Quickstart
 
 The following command will download `roscpp` sources, recursively look for its dependencies and produce a Guix package definition for each of them.
